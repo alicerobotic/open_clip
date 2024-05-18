@@ -236,6 +236,10 @@ class CLIP(nn.Module):
 
         self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype)
 
+        ## cy modified
+        self.ext1 = nn.Linear(1024*2,1536)
+        self.ext2 = nn.Linear(1536,1024)
+
         text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
         self.transformer = text.transformer
         self.context_length = text.context_length
@@ -246,6 +250,7 @@ class CLIP(nn.Module):
         self.text_projection = text.text_projection
         self.text_pool_type = text.pool_type
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
+
 
         self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
         if init_logit_bias is not None:
@@ -266,6 +271,15 @@ class CLIP(nn.Module):
         features = self.visual(image)
         return F.normalize(features, dim=-1) if normalize else features
 
+    # cy modified
+    def ext(self,image):
+        image = self.ext1(image)
+        image = F.normalize(image, dim=-1)
+        image = self.ext2(image)
+        features =F.normalize(image, dim=-1)
+        return features
+
+
     def encode_text(self, text, normalize: bool = False):
         cast_dtype = self.transformer.get_cast_dtype()
 
@@ -284,12 +298,21 @@ class CLIP(nn.Module):
                 x = x @ self.text_projection
 
         return F.normalize(x, dim=-1) if normalize else x
-
+    # cy modified
     def get_logits(self, image, weather, text):
         image_features = self.encode_image(image, normalize=True)
         weather_features = self.encode_text(weather, normalize=True)
-        image_features = image_features + weather_features
-        
+
+        # print('enter, weather shape: ',weather_features.shape)
+
+        image_features = torch.cat((image_features,weather_features),dim= -1)
+        # print('after cat: ', image_features.shape)
+
+        image_features = self.ext(image_features)
+        # print('after 2 liner: ',image_features.shape)
+        #
+        # print('whether normalization: ',torch.norm(image_features[0],p=2))
+
         text_features = self.encode_text(text, normalize=True)
         image_logits = self.logit_scale.exp() * image_features @ text_features.T
         if self.logit_bias is not None:
@@ -297,6 +320,7 @@ class CLIP(nn.Module):
         text_logits = image_logits.T
         return image_logits, text_logits
 
+    # cy modified
     def forward(
             self,
             image: Optional[torch.Tensor] = None,
@@ -305,7 +329,17 @@ class CLIP(nn.Module):
     ):
         image_features = self.encode_image(image, normalize=True) if image is not None else None
         weather_features = self.encode_text(weather, normalize=True) if weather is not None else None
-        image_features = image_features + weather_features
+
+        # print('enter, weather shape: ',weather_features.shape)
+        # print('enter, image original shape: ', image_features.shape)
+        image_features = torch.cat((image_features,weather_features),dim= -1)
+        # print('after cat: ', image_features.shape)
+
+        image_features = self.ext(image_features)
+        # print('after 2 liner: ',image_features.shape)
+        #
+        # print('whether normalization: ',torch.norm(image_features[0],p=2))
+
         text_features = self.encode_text(text, normalize=True) if text is not None else None
 
         if self.output_dict:
